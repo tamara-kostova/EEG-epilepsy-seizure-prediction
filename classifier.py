@@ -6,12 +6,13 @@ from dataclasses import dataclass
 from typing import Dict, List, Any, Tuple
 from sklearn.preprocessing import normalize
 from sklearn.model_selection import train_test_split, KFold
-from sklearn.metrics import confusion_matrix, accuracy_score
+from sklearn.metrics import confusion_matrix
 from sklearn.neural_network import MLPClassifier
 from sklearn.svm import SVC
 from sklearn.ensemble import RandomForestClassifier, AdaBoostClassifier
 from sklearn.neighbors import KNeighborsClassifier
 from sklearn.feature_selection import VarianceThreshold
+import logging
 
 
 @dataclass
@@ -35,6 +36,7 @@ class SeizureClassifier:
         self.input_file = input_file
         self.output_dir = output_dir
         self.models = self._get_model_configs()
+        self.logger = logging.getLogger(__name__)
         os.makedirs(output_dir, exist_ok=True)
 
     def _get_model_configs(self) -> List[ModelConfig]:
@@ -64,7 +66,7 @@ class SeizureClassifier:
         ]
 
     def load_and_preprocess_data(self) -> Tuple[np.ndarray, np.ndarray]:
-        print("Loading data")
+        self.logger.info("Loading data")
         data = pd.read_csv(self.input_file)
 
         X = data.drop(["seizure", "start_time", "subject"], axis=1, errors="ignore")
@@ -75,8 +77,8 @@ class SeizureClassifier:
 
         X = normalize(X)
 
-        print(f"Dataset shape: {X.shape}")
-        print(f"Seizure samples: {np.sum(y)}")
+        self.logger.info(f"Dataset shape: {X.shape}")
+        self.logger.info(f"Seizure samples: {np.sum(y)}")
         return X, y
 
     def evaluate_model(
@@ -89,24 +91,32 @@ class SeizureClassifier:
     ) -> Tuple[EvaluationMetrics, EvaluationMetrics]:
         kf = KFold(n_splits=5)
         cv_metrics = []
-
-        for train_idx, val_idx in kf.split(X_train):
+        self.logger.info("Starting cross-validation for model")
+        for fold, (train_idx, val_idx) in enumerate(kf.split(X_train), 1):
+            self.logger.info(f"Split: {train_idx} {val_idx}")
             X_fold_train, X_fold_val = X_train[train_idx], X_train[val_idx]
             y_fold_train, y_fold_val = y_train[train_idx], y_train[val_idx]
 
+            self.logger.info(f"Fold {fold} train shape: {X_fold_train.shape}")
+            self.logger.info(f"Fold {fold} validation shape: {X_fold_val.shape}")
+
             model.fit(X_fold_train, y_fold_train)
+
             y_pred = model.predict(X_fold_val)
 
             tn, fp, fn, tp = confusion_matrix(y_fold_val, y_pred).ravel()
 
-            cv_metrics.append(
-                EvaluationMetrics(
-                    accuracy=(tp + tn) / (tp + tn + fp + fn),
-                    tpr=tp / (tp + fn) if (tp + fn) > 0 else 0,
-                    fpr=fp / (fp + tn) if (fp + tn) > 0 else 0,
-                    confusion_matrix=confusion_matrix(y_fold_val, y_pred),
-                    training_time=0,
-                )
+            fold_metrics = EvaluationMetrics(
+                accuracy=(tp + tn) / (tp + tn + fp + fn),
+                tpr=tp / (tp + fn) if (tp + fn) > 0 else 0,
+                fpr=fp / (fp + tn) if (fp + tn) > 0 else 0,
+                confusion_matrix=confusion_matrix(y_fold_val, y_pred),
+                training_time=0,
+            )
+
+            cv_metrics.append(fold_metrics)
+            self.logger.info(
+                f"Fold {fold} Metrics - Accuracy: {fold_metrics.accuracy}, TPR: {fold_metrics.tpr}"
             )
 
         start_time = time.time()
@@ -123,6 +133,11 @@ class SeizureClassifier:
             confusion_matrix=confusion_matrix(y_test, y_pred),
             training_time=training_time,
         )
+
+        self.logger.info("Test Set Metrics:")
+        self.logger.info(f"Accuracy: {test_metrics.accuracy}")
+        self.logger.info(f"TPR: {test_metrics.tpr}")
+        self.logger.info(f"Training Time: {test_metrics.training_time} seconds")
 
         return cv_metrics, test_metrics
 
@@ -146,7 +161,7 @@ class SeizureClassifier:
         df = pd.DataFrame([results])
         output_file = os.path.join(self.output_dir, f"{model_name}_results.csv")
         df.to_csv(output_file, index=False)
-        print(f"Results saved to {output_file}")
+        self.logger.info(f"Results saved to {output_file}")
 
     def run_classification(self):
         X, y = self.load_and_preprocess_data()
@@ -156,7 +171,7 @@ class SeizureClassifier:
 
         all_results = []
         for config in self.models:
-            print(f"\nTraining {config.name}")
+            self.logger.info(f"\nTraining {config.name}")
             try:
                 model = config.model(**config.params)
                 cv_metrics, test_metrics = self.evaluate_model(
@@ -165,7 +180,7 @@ class SeizureClassifier:
                 self.save_results(config.name, cv_metrics, test_metrics)
                 all_results.append({"model": config.name, "metrics": test_metrics})
             except Exception as e:
-                print(f"Error training {config.name}: {str(e)}")
+                self.logger.error(f"Error training {config.name}: {str(e)}")
 
         combined_results = pd.concat(
             [
@@ -178,12 +193,12 @@ class SeizureClassifier:
         combined_results.to_csv(
             os.path.join(self.output_dir, "all_results.csv"), index=False
         )
-        print("\nAll results saved successfully!")
+        self.logger.info("\nAll results saved successfully!")
 
 
 def main():
     classifier = SeizureClassifier(
-        input_file="datatest/subjects.csv", output_dir="output/classification_results"
+        input_file="dataset/subjects.csv", output_dir="output/classification_results"
     )
     classifier.run_classification()
 

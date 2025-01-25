@@ -1,7 +1,7 @@
 import pandas as pd
 import os
 
-DATAFOLDER = "datatest"
+DATAFOLDER = "dataset"
 
 OUTPUT_FILE = "subjects.csv"
 
